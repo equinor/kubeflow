@@ -1,6 +1,7 @@
 package existing_arrikto
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	cryptorand "crypto/rand"
@@ -9,6 +10,20 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"html/template"
+	"io"
+
+	// "io/ioutil"
+	"math/big"
+	"math/rand"
+	"net"
+	"net/url"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"time"
+
 	kfapisv3 "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis"
 	kftypesv3 "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps"
 	kfdefs "github.com/kubeflow/kubeflow/bootstrap/v3/pkg/apis/apps/kfdef/v1alpha1"
@@ -16,22 +31,14 @@ import (
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/crypto/bcrypt"
-	"html/template"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/serializer/json"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/rest"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
-	"math/big"
-	"math/rand"
-	"net"
-	"net/url"
-	"os"
-	"path"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"strings"
-	"time"
 )
 
 const (
@@ -45,9 +52,13 @@ const (
 
 type Existing struct {
 	kfdefs.KfDef
-	istioManifests    []manifest
+	// istioManifests    []manifest
 	authOIDCManifests []manifest
 }
+
+const (
+	outputDir = "argocd"
+)
 
 type manifest struct {
 	name string
@@ -57,17 +68,17 @@ type manifest struct {
 func GetPlatform(kfdef *kfdefs.KfDef) (kftypesv3.Platform, error) {
 
 	kfRepoDir := kfdef.Status.ReposCache[kftypesv3.ManifestsRepoName].LocalPath
-	istioManifestsDir := path.Join(kfRepoDir, CONFIG_LOCAL_PATH, "istio")
-	istioManifests := []manifest{
-		{
-			name: "Istio CRDs",
-			path: path.Join(istioManifestsDir, "crds.yaml"),
-		},
-		{
-			name: "Istio Control Plane",
-			path: path.Join(istioManifestsDir, "istio-noauth.yaml"),
-		},
-	}
+	// istioManifestsDir := path.Join(kfRepoDir, CONFIG_LOCAL_PATH, "istio")
+	// istioManifests := []manifest{
+	// 	{
+	// 		name: "Istio CRDs",
+	// 		path: path.Join(istioManifestsDir, "crds.yaml"),
+	// 	},
+	// 	{
+	// 		name: "Istio Control Plane",
+	// 		path: path.Join(istioManifestsDir, "istio-noauth.yaml"),
+	// 	},
+	// }
 
 	authOIDCManifestsDir := path.Join(kfRepoDir, CONFIG_LOCAL_PATH, "auth_oidc")
 	authOIDCManifests := []manifest{
@@ -90,8 +101,8 @@ func GetPlatform(kfdef *kfdefs.KfDef) (kftypesv3.Platform, error) {
 	}
 
 	existing := &Existing{
-		KfDef:             *kfdef,
-		istioManifests:    istioManifests,
+		KfDef: *kfdef,
+		// istioManifests:    istioManifests,
 		authOIDCManifests: authOIDCManifests,
 	}
 	return existing, nil
@@ -121,23 +132,62 @@ func (existing *Existing) Apply(resources kftypesv3.ResourceEnum) error {
 	}
 
 	// Create KFApp's namespace
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: existing.Namespace,
-		},
-	}
-	log.Infof("Creating namespace: %v", ns.Name)
+	// ns := &corev1.Namespace{
+	// 	TypeMeta: metav1.TypeMeta{
+	// 		Kind:       "Namespace",
+	// 		APIVersion: "v1",
+	// 	},
+	// 	ObjectMeta: metav1.ObjectMeta{
+	// 		Name: existing.Namespace,
+	// 	},
+	// }
+	// serializer := json.NewYAMLSerializer(json.DefaultMetaFactory, nil, nil)
 
-	err = kubeclient.Create(context.TODO(), ns)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		log.Errorf("Error creating namespace %v", ns.Name)
-		return internalError(errors.WithStack(err))
-	}
+	argocdBaseDir := path.Join(existing.Spec.AppDir, outputDir)
+
+	// destPath := path.Join(argocdBaseDir, "application")
+	// destPathErr := os.MkdirAll(destPath, os.ModePerm)
+	// if destPathErr != nil {
+	// 	log.Errorf("couldn't create directory %v Error %v", destPath, destPathErr)
+	// 	return &kfapisv3.KfError{
+	// 		Code:    int(kfapisv3.INTERNAL_ERROR),
+	// 		Message: fmt.Sprintf("couldn't create directory %v Error %v", destPath, destPathErr),
+	// 	}
+	// }
+	// destFile := path.Join(destPath, "kubeflow.yaml")
+	// destination, err := os.Create(destFile)
+	// if err != nil {
+	// 	log.Errorf("couldn't create destination file %v Error %v", destFile, err)
+	// 	return &kfapisv3.KfError{
+	// 		Code:    int(kfapisv3.INTERNAL_ERROR),
+	// 		Message: fmt.Sprintf("couldn't create destination file %v Error %v", destFile, err),
+	// 	}
+	// }
+	// defer destination.Close()
+
+	// namespaceFile := bufio.NewWriter(destination)
+	// log.Infof("Saving namespace: %s", "kubeflow.yaml")
+	// namespaceFileErr := serializer.Encode(ns, namespaceFile)
+	// if namespaceFileErr != nil {
+	// 	return &kfapisv3.KfError{
+	// 		Code:    int(kfapisv3.INTERNAL_ERROR),
+	// 		Message: fmt.Sprintf("error writing to %v Error %v", destination, namespaceFileErr),
+	// 	}
+	// }
+
+	// namespaceFile.Flush()
+	// log.Infof("Creating namespace: %v", ns.Name)
+
+	// err = kubeclient.Create(context.TODO(), ns)
+	// if err != nil && !apierrors.IsAlreadyExists(err) {
+	// 	log.Errorf("Error creating namespace %v", ns.Name)
+	// 	return internalError(errors.WithStack(err))
+	// }
 
 	// Install Istio
-	if err := applyManifests(existing.istioManifests); err != nil {
-		return internalError(errors.WithStack(err))
-	}
+	// if err := applyManifests(existing.istioManifests); err != nil {
+	// 	return internalError(errors.WithStack(err))
+	// }
 
 	// Get Kubeflow and Dex Endpoints
 	kfEndpoint, oidcEndpoint, err := getEndpoints(kubeclient)
@@ -152,7 +202,7 @@ func (existing *Existing) Apply(resources kftypesv3.ResourceEnum) error {
 	if err != nil {
 		return internalError(errors.WithStack(err))
 	}
-	if err := createSelfSignedCerts(kubeclient, kfEndpointURL.Hostname()); err != nil {
+	if err := createSelfSignedCerts(kubeclient, kfEndpointURL.Hostname(), path.Join(argocdBaseDir, "authservice")); err != nil {
 		return internalError(errors.WithStack(err))
 	}
 
@@ -197,10 +247,55 @@ func (existing *Existing) Apply(resources kftypesv3.ResourceEnum) error {
 		return internalError(errors.WithStack(err))
 	}
 
-	// Install OIDC Authentication
-	if err := applyManifests(existing.authOIDCManifests); err != nil {
-		return internalError(errors.WithStack(err))
+	for _, m := range existing.authOIDCManifests {
+		basename := filepath.Base(m.path)
+		dirName := strings.TrimSuffix(basename, filepath.Ext(basename))
+		log.Infof("Creating directory: %v", dirName)
+		argocdDir := path.Join(argocdBaseDir, dirName)
+		argocdDirErr := os.MkdirAll(argocdDir, os.ModePerm)
+		if argocdDirErr != nil {
+			log.Errorf("couldn't create directory %v Error %v", dirName, argocdDirErr)
+			return &kfapisv3.KfError{
+				Code:    int(kfapisv3.INTERNAL_ERROR),
+				Message: fmt.Sprintf("couldn't create directory %v Error %v", dirName, argocdDirErr),
+			}
+		}
+
+		source, err := os.Open(m.path)
+		if err != nil {
+			log.Errorf("couldn't open source file %v Error %v", m.path, err)
+			return &kfapisv3.KfError{
+				Code:    int(kfapisv3.INTERNAL_ERROR),
+				Message: fmt.Sprintf("couldn't open source file %v Error %v", m.path, err),
+			}
+		}
+		defer source.Close()
+
+		destPath := path.Join(argocdDir, basename)
+		destination, err := os.Create(destPath)
+		if err != nil {
+			log.Errorf("couldn't create destination file %v Error %v", destPath, err)
+			return &kfapisv3.KfError{
+				Code:    int(kfapisv3.INTERNAL_ERROR),
+				Message: fmt.Sprintf("couldn't create destination file %v Error %v", destPath, err),
+			}
+		}
+		defer destination.Close()
+
+		log.Infof("Copying manifest: %v", basename)
+		if _, err := io.Copy(destination, source); err != nil {
+			log.Errorf("couldn't copy file %v into %v Error %v", source, destination, err)
+			return &kfapisv3.KfError{
+				Code:    int(kfapisv3.INTERNAL_ERROR),
+				Message: fmt.Sprintf("couldn't copy file %v into %v Error %v", source, destination, err),
+			}
+		}
 	}
+
+	// Install OIDC Authentication
+	// if err := applyManifests(existing.authOIDCManifests); err != nil {
+	// 	return internalError(errors.WithStack(err))
+	// }
 
 	return nil
 }
@@ -246,9 +341,9 @@ func (existing *Existing) Delete(resources kftypesv3.ResourceEnum) error {
 	if err := deleteManifests(rev(existing.authOIDCManifests)); err != nil {
 		return internalError(errors.WithStack(err))
 	}
-	if err := deleteManifests(rev(existing.istioManifests)); err != nil {
-		return internalError(errors.WithStack(err))
-	}
+	// if err := deleteManifests(rev(existing.istioManifests)); err != nil {
+	// 	return internalError(errors.WithStack(err))
+	// }
 	return nil
 }
 
@@ -319,7 +414,7 @@ func getEndpoints(kubeclient client.Client) (string, string, error) {
 	return kfEndpoint, oidcEndpoint, nil
 }
 
-func createSelfSignedCerts(kubeclient client.Client, addr string) error {
+func createSelfSignedCerts(kubeclient client.Client, addr string, argocdAuthserviceDir string) error {
 
 	cert, key, err := generateCert(addr)
 	if err != nil {
@@ -328,6 +423,10 @@ func createSelfSignedCerts(kubeclient client.Client, addr string) error {
 
 	// Create secret from them
 	secret := &corev1.Secret{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "Secret",
+			APIVersion: "v1",
+		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "istio-ingressgateway-certs",
 			Namespace: "istio-system",
@@ -336,11 +435,61 @@ func createSelfSignedCerts(kubeclient client.Client, addr string) error {
 			"tls.crt": cert,
 			"tls.key": key,
 		},
+		Type: "kubernetes.io/tls",
 	}
 
-	if err := kubeclient.Create(context.TODO(), secret); err != nil && !apierrors.IsAlreadyExists(err) {
-		return errors.WithStack(err)
+	serializer := json.NewYAMLSerializer(json.DefaultMetaFactory, nil, nil)
+	destPathErr := os.MkdirAll(argocdAuthserviceDir, os.ModePerm)
+	if destPathErr != nil {
+		log.Errorf("couldn't create directory %v Error %v", argocdAuthserviceDir, destPathErr)
+		return &kfapisv3.KfError{
+			Code:    int(kfapisv3.INTERNAL_ERROR),
+			Message: fmt.Sprintf("couldn't create directory %v Error %v", argocdAuthserviceDir, destPathErr),
+		}
 	}
+	destPath := path.Join(argocdAuthserviceDir, "istio-ingressgateway-certs.yaml")
+	destination, err := os.Create(destPath)
+	if err != nil {
+		log.Errorf("couldn't create destination file %v Error %v", destPath, err)
+		return &kfapisv3.KfError{
+			Code:    int(kfapisv3.INTERNAL_ERROR),
+			Message: fmt.Sprintf("couldn't create destination file %v Error %v", destPath, err),
+		}
+	}
+	defer destination.Close()
+
+	argocdAuthserviceFile := bufio.NewWriter(destination)
+	log.Infof("Saving secret: %s", "istio-ingressgateway-certs.yaml")
+	argocdAuthserviceFileErr := serializer.Encode(secret, argocdAuthserviceFile)
+	if argocdAuthserviceFileErr != nil {
+		return &kfapisv3.KfError{
+			Code:    int(kfapisv3.INTERNAL_ERROR),
+			Message: fmt.Sprintf("error writing to %v Error %v", destination, argocdAuthserviceFileErr),
+		}
+	}
+
+	argocdAuthserviceFile.Flush()
+
+	// Output the objects.
+	// yamlResources, yamlResourcesErr := secret.EncodeAsYaml()
+	// if yamlResourcesErr != nil {
+	// 	return &kfapisv3.KfError{
+	// 		Code:    int(kfapisv3.INTERNAL_ERROR),
+	// 		Message: fmt.Sprintf("error generating yaml Error %v", yamlResourcesErr),
+	// 	}
+	// }
+	// argocdAuthserviceFile := filepath.Join(argocdAuthserviceDir, "istio-ingressgateway-certs.yaml")
+	// argocdAuthserviceFileErr := ioutil.WriteFile(argocdAuthserviceFile, secret, 0644)
+	// if argocdAuthserviceFileErr != nil {
+	// 	return &kfapisv3.KfError{
+	// 		Code:    int(kfapisv3.INTERNAL_ERROR),
+	// 		Message: fmt.Sprintf("error writing to %v Error %v", argocdAuthserviceFile, argocdAuthserviceFileErr),
+	// 	}
+	// }
+
+	// if err := kubeclient.Create(context.TODO(), secret); err != nil && !apierrors.IsAlreadyExists(err) {
+	// 	return errors.WithStack(err)
+	// }
 
 	return nil
 }
@@ -447,21 +596,21 @@ func getLBAddress(kubeclient client.Client) (string, error) {
 	return "", errors.New(fmt.Sprintf("Couldn't find a LoadBalancer address in Service's %v Status.", lbServiceName))
 }
 
-func applyManifests(manifests []manifest) error {
-	config := kftypesv3.GetConfig()
-	for _, m := range manifests {
-		log.Infof("Installing %s...", m.name)
-		err := utils.CreateResourceFromFile(
-			config,
-			m.path,
-		)
-		if err != nil {
-			log.Errorf("Failed to create %s: %v", m.name, err)
-			return err
-		}
-	}
-	return nil
-}
+// func applyManifests(manifests []manifest) error {
+// config := kftypesv3.GetConfig()
+// 	for _, m := range manifests {
+//		log.Infof("Installing %s...", m.name)
+//		err := utils.CreateResourceFromFile(
+//			config,
+//			m.path,
+//		)
+//		if err != nil {
+//			log.Errorf("Failed to create %s: %v", m.name, err)
+//			return err
+//		}
+// 	}
+// 	return nil
+// }
 
 func deleteManifests(manifests []manifest) error {
 	config := kftypesv3.GetConfig()

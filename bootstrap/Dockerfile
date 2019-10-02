@@ -69,8 +69,10 @@ RUN make build-kfctl
 # Final image base
 #
 
-FROM golang:$GOLANG_VERSION as barebones_base
-
+FROM alpine:3.10.1 as barebones_base
+RUN apk update
+RUN apk add ca-certificates
+RUN rm -rf /var/cache/apk/*
 RUN mkdir -p /opt/kubeflow
 WORKDIR /opt/kubeflow
 

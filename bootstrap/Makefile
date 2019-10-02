@@ -19,7 +19,7 @@ GOPATH ?= $(HOME)/go
 # export DOCKER_BUILD_OPTS=--no-cache
 BOOTSTRAPPER_IMG ?= gcr.io/$(GCLOUD_PROJECT)/bootstrapper
 GC_IMG ?= gcr.io/$(GCLOUD_PROJECT)/gcserver
-KFCTL_IMG ?= gcr.io/$(GCLOUD_PROJECT)/kfctl
+KFCTL_IMG ?= auroradevacr.azurecr.io/kfctl
 # We use --always because otherwise when we clone with shallow depth we might not get
 # any tags and it will fail.
 TAG ?= $(eval TAG := $(shell git describe --tags --always --long))$(TAG)
@@ -93,7 +93,7 @@ build-bootstrap: deepcopy generate fmt vet
 	${GO} build -gcflags '-N -l' -o bin/bootstrapper cmd/bootstrap/main.go
 
 build-kfctl: deepcopy generate fmt vet
-	${GO} build -gcflags '-N -l' -ldflags "-X main.VERSION=$(TAG)" -o bin/kfctl cmd/kfctl/main.go
+	CGO_ENABLED=0 ${GO} build -gcflags '-N -l' -ldflags "-X main.VERSION=$(TAG)" -o bin/kfctl cmd/kfctl/main.go
 
 build-gc: deepcopy generate fmt vet
 	${GO} build -gcflags '-N -l' -ldflags "-X main.VERSION=$(TAG)" -o bin/gc cmd/gc/main.go
@@ -128,14 +128,14 @@ build-kfctl-container:
                 --build-arg REPO="$(REPO)" \
                 --build-arg BRANCH=$(BRANCH) \
 		--build-arg GOLANG_VERSION=$(GOLANG_VERSION) \
-		--build-arg VERSION=$(TAG) \
+		--build-arg VERSION=argocd-$(TAG) \
 		--target=$(KFCTL_TARGET) \
-		--tag $(KFCTL_IMG)/builder:$(TAG) .
-	@echo Built $(KFCTL_IMG)/builder:$(TAG)
+		--tag $(KFCTL_IMG):argocd-$(TAG) .
+	@echo Built $(KFCTL_IMG):argocd-$(TAG)
 	mkdir -p bin
 	docker create \
 		--name=temp_kfctl_container \
-		$(KFCTL_IMG)/builder:$(TAG)
+		$(KFCTL_IMG):argocd-$(TAG)
 	docker cp temp_kfctl_container:/usr/local/bin/kfctl ./bin/kfctl
 	docker rm temp_kfctl_container
 	@echo Exported kfctl binary to bin/kfctl
