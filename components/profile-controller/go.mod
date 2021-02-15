@@ -52,4 +52,12 @@ require (
 	sigs.k8s.io/structured-merge-diff/v4 v4.0.2 // indirect
 )
 
-replace git.apache.org/thrift.git => github.com/apache/thrift v0.0.0-20180902110319-2566ecd5d999
+replace (
+	git.apache.org/thrift.git => github.com/apache/thrift v0.0.0-20180902110319-2566ecd5d999
+	github.com/googleapis/gnostic => github.com/googleapis/gnostic v0.3.1
+	k8s.io/api => k8s.io/api v0.17.0
+	k8s.io/apimachinery => k8s.io/apimachinery v0.17.0
+	k8s.io/client-go => k8s.io/client-go v0.17.0
+	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20191107075043-30be4d16710a
+	k8s.io/utils => k8s.io/utils v0.0.0-20191114200735-6ca3b61696b6
+)

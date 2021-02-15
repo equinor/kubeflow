@@ -18,6 +18,7 @@ package main
 import (
 	"flag"
 	"os"
+	"strings"
 
 	profilev1 "github.com/kubeflow/kubeflow/components/profile-controller/api/v1"
 	"github.com/kubeflow/kubeflow/components/profile-controller/controllers"
@@ -33,11 +34,67 @@ import (
 const USERIDHEADER = "userid-header"
 const USERIDPREFIX = "userid-prefix"
 const WORKLOADIDENTITY = "workload-identity"
+const PODDEFAULTS = "pd"
 
 var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 )
+
+func sliceUniqMap(s []string) []string {
+	seen := make(map[string]struct{}, len(s))
+	j := 0
+	for _, v := range s {
+		if _, ok := seen[v]; ok {
+			continue
+		}
+		seen[v] = struct{}{}
+		s[j] = v
+		j++
+	}
+	return s[:j]
+}
+
+func stringInSlice(a string, list []string) bool {
+	for _, b := range list {
+		if b == a {
+			return true
+		}
+	}
+	return false
+}
+
+func parsePodDefaults(podDefaults string) map[string]interface{} {
+	entries := strings.Split(podDefaults, ",")
+	var selectors []string
+	for _, e := range entries {
+		selectors = append(selectors, strings.Split(e, ".")[0])
+	}
+	selectorsFiltered := sliceUniqMap(selectors)
+
+	validFields := map[string]bool{
+		"labels": true,
+	}
+	selectorsMap := make(map[string]interface{})
+
+	for _, s := range selectorsFiltered {
+		fieldsMap := make(map[string][]string)
+		for _, e := range entries {
+			parts := strings.Split(e, ".")
+			selector := strings.ToLower(parts[0])
+			field := strings.ToLower(parts[1])
+			kvs := parts[2]
+			// kv := strings.Split(kvs, "=")
+
+			if selector == s && validFields[field] {
+				fieldsMap[field] = append(fieldsMap[field], kvs)
+			}
+		}
+		selectorsMap[s] = fieldsMap
+	}
+
+	return selectorsMap
+}
 
 func init() {
 	_ = clientgoscheme.AddToScheme(scheme)
@@ -53,6 +110,7 @@ func main() {
 	var userIdHeader string
 	var userIdPrefix string
 	var workloadIdentity string
+	var podDefaults string
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. Enabling this will ensure there is only one active controller manager.")
@@ -61,7 +119,8 @@ func main() {
 	flag.StringVar(&userIdHeader, USERIDHEADER, "x-goog-authenticated-user-email", "Key of request header containing user id")
 	flag.StringVar(&userIdPrefix, USERIDPREFIX, "accounts.google.com:", "Request header user id common prefix")
 	flag.StringVar(&workloadIdentity, WORKLOADIDENTITY, "", "Default identity (GCP service account) for workload_identity plugin")
-
+	flag.StringVar(&podDefaults, PODDEFAULTS, "", "Comma separated list of PodDefaults Spec Fields")
+	// os.Args = []string{"main", "-pd=ddpd-pod-labels.Labels.project=shared,ddpd-pod-labels.Labels.sub-project=ddpd,whitespace-pod-labels.Labels.project=shared,whitespace-pod-labels.Labels.sub-project=whitespace,whitespace-pod-labels.VolumeMounts.name=tmp-volume"}
 	flag.Parse()
 
 	ctrl.SetLogger(zap.Logger(true))
@@ -78,6 +137,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	pd := make(map[string]interface{})
+
+	if len(podDefaults) > 0 {
+		pd = parsePodDefaults(podDefaults)
+	}
+
 	if err = (&controllers.ProfileReconciler{
 		Client:           mgr.GetClient(),
 		Scheme:           mgr.GetScheme(),
@@ -85,6 +150,7 @@ func main() {
 		UserIdHeader:     userIdHeader,
 		UserIdPrefix:     userIdPrefix,
 		WorkloadIdentity: workloadIdentity,
+		PodDefaults:      pd,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Profile")
 		os.Exit(1)

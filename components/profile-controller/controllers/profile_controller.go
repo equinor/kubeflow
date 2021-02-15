@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/ghodss/yaml"
@@ -43,6 +44,9 @@ import (
 )
 
 const AUTHZPOLICYISTIO = "ns-owner-access-istio"
+
+// Istio constants
+const ISTIOALLOWALL = "allow-all"
 
 // Istio constants
 const ISTIOALLOWALL = "allow-all"
@@ -75,6 +79,8 @@ var kubeflowNamespaceLabels = map[string]string{
 const DEFAULT_EDITOR = "default-editor"
 const DEFAULT_VIEWER = "default-viewer"
 
+const PODDEFAULT_NAME = "projects-labels"
+
 type Plugin interface {
 	// Called when profile CR is created / updated
 	ApplyPlugin(*ProfileReconciler, *profilev1.Profile) error
@@ -91,6 +97,7 @@ type ProfileReconciler struct {
 	UserIdHeader     string
 	UserIdPrefix     string
 	WorkloadIdentity string
+	PodDefaults      map[string]interface{}
 }
 
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs="*"
@@ -215,6 +222,19 @@ func (r *ProfileReconciler) Reconcile(request ctrl.Request) (ctrl.Result, error)
 		IncRequestErrorCounter("error updating ServiceAccount", SEVERITY_MAJOR)
 		return reconcile.Result{}, err
 	}
+	// Create PodDefaults in target namespace.
+	if len(r.PodDefaults) > 0 {
+		for pdName, pdSpec := range r.PodDefaults {
+			if err = r.updatePodDefault(instance, pdName, pdSpec); err != nil {
+				logger.Error(err, "error Updating PodDefault", "namespace", instance.Name, "name",
+					pdName)
+				IncRequestErrorCounter("error updating PodDefault", SEVERITY_MAJOR)
+				return reconcile.Result{}, err
+			}
+		}
+	} else {
+		logger.Info("No update on pod defaults", "spec", r.PodDefaults)
+	}
 
 	// TODO: add role for impersonate permission
 
@@ -334,6 +354,7 @@ func (r *ProfileReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&istioSecurityClient.AuthorizationPolicy{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.RoleBinding{}).
+		Owns(&settingsapi.PodDefault{}).
 		Complete(r)
 }
 
@@ -629,4 +650,73 @@ func updateNamespaceLabels(ns *corev1.Namespace) bool {
 		}
 	}
 	return updated
+}
+
+func (r *ProfileReconciler) updatePodDefault(profileIns *profilev1.Profile, pdName string, pdSpec interface{}) error {
+	logger := r.Log.WithValues("profile", profileIns.Name)
+	l := pdSpec.(map[string][]string)
+	m := make(map[string]string)
+	for _, e := range l["labels"] {
+		labels := strings.Split(e, "=")
+		m[labels[0]] = labels[1]
+	}
+	podDefault := &settingsapi.PodDefault{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pdName,
+			Namespace: profileIns.Name,
+		},
+		Spec: settingsapi.PodDefaultSpec{
+			Desc:   pdName,
+			Labels: m,
+			Selector: metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					pdName: "true",
+				},
+			},
+			VolumeMounts: []corev1.VolumeMount{
+				{
+					Name:      "tmp-volume",
+					MountPath: "/tmp",
+				},
+			},
+			Volumes: []corev1.Volume{
+				{
+					Name: "tmp-volume",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{},
+					},
+				},
+			},
+		},
+	}
+	if err := controllerutil.SetControllerReference(profileIns, podDefault, r.Scheme); err != nil {
+		return err
+	}
+	foundPd := &settingsapi.PodDefault{}
+	err := r.Get(context.TODO(), types.NamespacedName{Name: podDefault.Name,
+		Namespace: podDefault.Namespace}, foundPd)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			logger.Info("Creating PodDefault", "namespace", podDefault.Namespace,
+				"name", podDefault.Name)
+			err = r.Create(context.TODO(), podDefault)
+			if err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+	} else {
+		if !reflect.DeepEqual(podDefault.Spec, foundPd.Spec) {
+			foundPd.Spec = podDefault.Spec
+			logger.Info("Updating PodDefault", "namespace", podDefault.Namespace,
+				"name", podDefault.Name)
+			err = r.Update(context.TODO(), foundPd)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }
