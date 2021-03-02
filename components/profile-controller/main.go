@@ -17,8 +17,10 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"strings"
+	"unicode"
 
 	profilev1 "github.com/kubeflow/kubeflow/components/profile-controller/api/v1"
 	"github.com/kubeflow/kubeflow/components/profile-controller/controllers"
@@ -41,6 +43,39 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
+func removeUnquotedSpace(s string) (string, error) {
+	rs := make([]rune, 0, len(s))
+	const out = rune(0)
+	var quote rune = out
+	var escape = false
+	for _, r := range s {
+		if !escape {
+			if r == '`' || r == '"' || r == '\'' {
+				if quote == out {
+					// start unescaped quote
+					quote = r
+				} else if quote == r {
+					// end (matching) unescaped quote
+					quote = out
+				}
+			}
+		}
+		// backslash (\) is the escape character
+		// except when it is the second backslash of a pair
+		escape = !escape && r == '\\'
+		if quote != out || !unicode.IsSpace(r) {
+			// between matching unescaped quotes
+			// or not whitespace
+			rs = append(rs, r)
+		}
+	}
+	if quote != out {
+		err := fmt.Errorf("unmatched unescaped quote: %q", quote)
+		return "", err
+	}
+	return string(rs), nil
+}
+
 func sliceUniqMap(s []string) []string {
 	seen := make(map[string]struct{}, len(s))
 	j := 0
@@ -55,6 +90,26 @@ func sliceUniqMap(s []string) []string {
 	return s[:j]
 }
 
+func SplitNotInQuotes(s string, sep string) []string {
+	res := []string{}
+	var beg int
+	var inString string
+
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep[0] && inString == "" {
+			res = append(res, s[beg:i])
+			beg = i + 1
+		} else if s[i] == '"' || s[i] == '\'' {
+			if inString == "" {
+				inString = string(s[i])
+			} else if i > 0 && s[i-1] != '\\' {
+				inString = ""
+			}
+		}
+	}
+	return append(res, s[beg:])
+}
+
 func stringInSlice(a string, list []string) bool {
 	for _, b := range list {
 		if b == a {
@@ -65,13 +120,18 @@ func stringInSlice(a string, list []string) bool {
 }
 
 func parsePodDefaults(podDefaults string) map[string]interface{} {
-	entries := strings.Split(podDefaults, ",")
+	csv, err := removeUnquotedSpace(strings.Replace(podDefaults, "\n", "", -1))
+	if err != nil {
+		setupLog.Error(err, "unable to trim spaces")
+		os.Exit(1)
+	}
+
+	entries := SplitNotInQuotes(csv, ",")
 	var selectors []string
 	for _, e := range entries {
-		selectors = append(selectors, strings.Split(e, ".")[0])
+		selectors = append(selectors, SplitNotInQuotes(e, ".")[0])
 	}
 	selectorsFiltered := sliceUniqMap(selectors)
-
 	validFields := map[string]bool{
 		"labels": true,
 	}
@@ -80,10 +140,10 @@ func parsePodDefaults(podDefaults string) map[string]interface{} {
 	for _, s := range selectorsFiltered {
 		fieldsMap := make(map[string][]string)
 		for _, e := range entries {
-			parts := strings.Split(e, ".")
+			parts := SplitNotInQuotes(e, ".")
 			selector := strings.ToLower(parts[0])
 			field := strings.ToLower(parts[1])
-			kvs := parts[2]
+			kvs := strings.Join(parts[2:], ".")
 			// kv := strings.Split(kvs, "=")
 
 			if selector == s && validFields[field] {

@@ -652,13 +652,29 @@ func updateNamespaceLabels(ns *corev1.Namespace) bool {
 	return updated
 }
 
+func trimQuotes(s string) string {
+	flag := ""
+	input := s
+	if len(input) > 0 && input[0] == '"' || input[0] == '\'' {
+		flag = string(input[0])
+		input = input[1:]
+	}
+
+	if len(input) > 0 && len(flag) > 0 && input[len(input)-1] == flag[0] {
+		input = input[:len(input)-1]
+	} else {
+		input = s
+	}
+	return input
+}
+
 func (r *ProfileReconciler) updatePodDefault(profileIns *profilev1.Profile, pdName string, pdSpec interface{}) error {
 	logger := r.Log.WithValues("profile", profileIns.Name)
 	l := pdSpec.(map[string][]string)
 	m := make(map[string]string)
 	for _, e := range l["labels"] {
 		labels := strings.Split(e, "=")
-		m[labels[0]] = labels[1]
+		m[labels[0]] = trimQuotes(labels[1])
 	}
 	podDefault := &settingsapi.PodDefault{
 		ObjectMeta: metav1.ObjectMeta{
