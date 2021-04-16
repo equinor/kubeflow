@@ -35,6 +35,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	settingsapi "github.com/kubeflow/kubeflow/components/profile-controller/api/settings/v1alpha1"
 	profilev1 "github.com/kubeflow/kubeflow/components/profile-controller/api/v1"
 	istioSecurity "istio.io/api/security/v1beta1"
 	istioSecurityClient "istio.io/client-go/pkg/apis/security/v1beta1"
