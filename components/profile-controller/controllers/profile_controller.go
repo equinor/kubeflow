@@ -46,12 +46,6 @@ import (
 
 const AUTHZPOLICYISTIO = "ns-owner-access-istio"
 
-// Istio constants
-const ISTIOALLOWALL = "allow-all"
-
-// Istio constants
-const ISTIOALLOWALL = "allow-all"
-
 const KFQUOTA = "kf-resource-quota"
 const PROFILEFINALIZER = "profile-finalizer"
 
